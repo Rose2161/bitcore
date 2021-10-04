@@ -1431,7 +1431,6 @@ export class API extends EventEmitter {
   // * @param {Boolean} opts.sendMax - Optional. Send maximum amount of funds that make sense under the specified fee/feePerKb conditions. (defaults to false).
   // * @param {string} opts.payProUrl - Optional. Paypro URL for peers to verify TX
   // * @param {Boolean} opts.excludeUnconfirmedUtxos[=false] - Optional. Do not use UTXOs of unconfirmed transactions as inputs
-  // * @param {Boolean} opts.validateOutputs[=true] - Optional. Perform validation on outputs.
   // * @param {Boolean} opts.dryRun[=false] - Optional. Simulate the action but do not change server state.
   // * @param {Array} opts.inputs - Optional. Inputs for this TX
   // * @param {number} opts.fee - Optional. Use an fixed fee for this TX (only when opts.inputs is specified)
@@ -1514,6 +1513,7 @@ export class API extends EventEmitter {
   // *
   // * @param {Object} opts
   // * @param {Boolean} opts.ignoreMaxGap[=false]
+  // * @param {Boolean} opts.isChange[=false]
   // * @param {Callback} cb
   // * @returns {Callback} cb - Return error or the address
   // */
@@ -2121,7 +2121,8 @@ export class API extends EventEmitter {
           for (const signed of serializedTxs) {
             signedTransactions.push({
               tx: signed,
-              weightedSize: weightedSize[i++]
+              weightedSize: weightedSize[i++],
+              escrowReclaimTx: txp.escrowReclaimTx
             });
           }
           PayProV2.verifyUnsignedPayment({
@@ -2815,7 +2816,7 @@ export class API extends EventEmitter {
         : new API(clientOpts);
 
       client.fromString(c);
-      client.openWallet({}, (err, status) => {
+      client.openWallet({}, async (err, status) => {
         //        console.log(
         //          `PATH: ${c.rootPath} n: ${c.n}:`,
         //          err && err.message ? err.message : 'FOUND!'
@@ -2837,8 +2838,28 @@ export class API extends EventEmitter {
           // Eth wallet with tokens?
           const tokenAddresses = status.preferences.tokenAddresses;
           if (!_.isEmpty(tokenAddresses)) {
+            function oneInchGetTokensData() {
+              return new Promise((resolve, reject) => {
+                client.request.get(
+                  '/v1/service/oneInch/getTokens',
+                  (err, data) => {
+                    if (err) return reject(err);
+                    return resolve(data);
+                  }
+                );
+              });
+            }
+            let customTokensData;
+            try {
+              customTokensData = await oneInchGetTokensData();
+            } catch (error) {
+              log.warn('oneInchGetTokensData err', error);
+              customTokensData = null;
+            }
             _.each(tokenAddresses, t => {
-              const token = Constants.TOKEN_OPTS[t];
+              const token =
+                Constants.TOKEN_OPTS[t] ||
+                (customTokensData && customTokensData[t]);
               if (!token) {
                 log.warn(`Token ${t} unknown`);
                 return;

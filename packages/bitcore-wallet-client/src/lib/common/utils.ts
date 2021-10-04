@@ -37,7 +37,9 @@ const MAX_DECIMAL_ANY_COIN = 18; // more that 14 gives rounding errors
 export class Utils {
   static getChain(coin: string): string {
     let normalizedChain = coin.toUpperCase();
-    if (Constants.ERC20.includes(coin)) {
+
+    // TODO: If in the future we add a new chain that supports custom tokens, check this condition
+    if (Constants.ERC20.includes(coin.toLowerCase()) || !Constants.COINS.includes(coin.toLowerCase())) {
       normalizedChain = 'ETH';
     }
     return normalizedChain;
@@ -166,7 +168,15 @@ export class Utils {
     return { _input, addressIndex, isChange };
   }
 
-  static deriveAddress(scriptType, publicKeyRing, path, m, network, coin) {
+  static deriveAddress(
+    scriptType,
+    publicKeyRing,
+    path,
+    m,
+    network,
+    coin,
+    escrowInputs?
+  ) {
     $.checkArgument(_.includes(_.values(Constants.SCRIPT_TYPES), scriptType));
 
     coin = coin || 'btc';
@@ -190,7 +200,24 @@ export class Utils {
         );
         break;
       case Constants.SCRIPT_TYPES.P2SH:
-        bitcoreAddress = bitcore.Address.createMultisig(publicKeys, m, network);
+        if (escrowInputs) {
+          var xpub = new bitcore.HDPublicKey(publicKeyRing[0].xPubKey);
+          const inputPublicKeys = escrowInputs.map(
+            input => xpub.deriveChild(input.path).publicKey
+          );
+          bitcoreAddress = bitcore.Address.createEscrow(
+            inputPublicKeys,
+            publicKeys[0],
+            network
+          );
+          publicKeys = [publicKeys[0], ...inputPublicKeys];
+        } else {
+          bitcoreAddress = bitcore.Address.createMultisig(
+            publicKeys,
+            m,
+            network
+          );
+        }
         break;
       case Constants.SCRIPT_TYPES.P2WPKH:
         bitcoreAddress = bitcore.Address.fromPublicKey(
@@ -364,6 +391,14 @@ export class Utils {
       }
 
       t.fee(txp.fee);
+
+      if (txp.instantAcceptanceEscrow && txp.escrowAddress) {
+        t.escrow(
+          txp.escrowAddress.address,
+          txp.instantAcceptanceEscrow + txp.fee
+        );
+      }
+
       t.change(txp.changeAddress.address);
 
       // Shuffle outputs for improved privacy
@@ -409,6 +444,7 @@ export class Utils {
 
       return t;
     } else {
+      // ETH ERC20 XRP
       const {
         data,
         destinationTag,
@@ -434,8 +470,13 @@ export class Utils {
       // If it is a token swap its an already created ERC20 transaction so we skip it and go directly to ETH transaction create
       const isERC20 = tokenAddress && !payProUrl && !isTokenSwap;
       const isETHMULTISIG = multisigContractAddress;
-      // using ETH as default since getChain returns undefined for custom tokens
-      const chain = isETHMULTISIG ? 'ETHMULTISIG' : isERC20 ? 'ERC20' : 'ETH';
+      const chain = isETHMULTISIG
+        ? 'ETHMULTISIG'
+        : isERC20
+        ? 'ERC20'
+        : txp.chain
+        ? txp.chain.toUpperCase()
+        : this.getChain(coin);
       for (let index = 0; index < recipients.length; index++) {
         const rawTx = Transactions.create({
           ...txp,

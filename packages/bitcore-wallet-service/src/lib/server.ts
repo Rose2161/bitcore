@@ -50,6 +50,7 @@ const Common = require('./common');
 const Utils = Common.Utils;
 const Constants = Common.Constants;
 const Defaults = Common.Defaults;
+const Services = Common.Services;
 
 const Errors = require('./errors/errordefinitions');
 
@@ -1309,7 +1310,7 @@ export class WalletService {
     const createNewAddress = (wallet, cb) => {
       let address;
       try {
-        address = wallet.createAddress(false);
+        address = wallet.createAddress(!!opts.isChange);
       } catch (e) {
         this.logw('Error creating address', e);
         return cb('Bad xPub');
@@ -1472,7 +1473,7 @@ export class WalletService {
       return utxo.txid + '|' + utxo.vout;
     };
 
-    let coin, allAddresses, allUtxos, utxoIndex, addressStrs, bc, wallet;
+    let coin, allAddresses, allUtxos, utxoIndex, addressStrs, bc, wallet, blockchainHeight;
     async.series(
       [
         next => {
@@ -1513,26 +1514,77 @@ export class WalletService {
         },
         next => {
           if (!wallet.isComplete()) return next();
-
           this._getBlockchainHeight(wallet.coin, wallet.network, (err, height, hash) => {
             if (err) return next(err);
-
-            const dustThreshold = Bitcore_[wallet.coin].Transaction.DUST_AMOUNT;
-            bc.getUtxos(wallet, height, (err, utxos) => {
-              if (err) return next(err);
-              if (utxos.length == 0) return cb(null, []);
-
-              // filter out DUST
-              allUtxos = _.filter(utxos, x => {
-                return x.satoshis >= dustThreshold;
-              });
-
-              utxoIndex = _.keyBy(allUtxos, utxoKey);
-              return next();
-            });
+            blockchainHeight = height;
+            next();
           });
         },
         next => {
+          if (!wallet.isComplete()) return next();
+
+          const dustThreshold = Bitcore_[wallet.coin].Transaction.DUST_AMOUNT;
+          const isEscrowPayment = wallet.isZceCompatible() && opts.instantAcceptanceEscrow ? true : false;
+          bc.getUtxos(
+            wallet,
+            blockchainHeight,
+            (err, utxos) => {
+              if (err) return next(err);
+              if (utxos.length == 0) return cb(null, []);
+
+              let unusableAddresses = [];
+              if (isEscrowPayment) {
+                const unusableUtxos = utxos.filter(utxo => utxo.spent || utxo.address.startsWith('p'));
+                unusableAddresses = unusableUtxos.map(utxo => utxo.address);
+              }
+
+              allUtxos = utxos.filter(x => x.satoshis >= dustThreshold && !unusableAddresses.includes(x.address));
+
+              return next();
+            },
+            { includeSpent: isEscrowPayment }
+          );
+        },
+        next => {
+          if (!wallet.isComplete() || !wallet.isZceCompatible()) return next();
+
+          // Ensure no UTXOs which originate from addresses that were recently used to fund a currently
+          // insufficiently confirmed ZCE-secured payment can be used to fund any subsequent transactions
+          // until the ZCE-secured payment (and escrow reclaim tx) receives 11 confirmations.
+          // Rationale: https://github.com/bitjson/bch-zce#wallet-utxo-selection
+
+          const bchRollingBlockCheckpointNumber = 10;
+          const bchReorgSafeBlockHeight = blockchainHeight - bchRollingBlockCheckpointNumber - 1;
+          let lockedAddresses = [];
+          bc.getTransactions(wallet, bchReorgSafeBlockHeight, (err, txs) => {
+            if (err) return next(err);
+            const unconfirmedZceTxs = txs.filter(tx => tx.category === 'move' && tx.address.startsWith('p'));
+            async.each(
+              unconfirmedZceTxs,
+              (tx: any, next) => {
+                this.getCoinsForTx({ txId: tx.txid }, (err, coins) => {
+                  if (err) return next(err);
+                  const inputAddresses = coins.inputs.map(input => input.address);
+                  lockedAddresses = [...lockedAddresses, ...inputAddresses];
+                  return next();
+                });
+              },
+              err => {
+                if (err) return next(err);
+                allUtxos = allUtxos.map(utxo => {
+                  if (lockedAddresses.includes(utxo.address)) {
+                    utxo.locked = true;
+                  }
+                  return utxo;
+                });
+                return next();
+              }
+            );
+          });
+        },
+        next => {
+          utxoIndex = _.keyBy(allUtxos, utxoKey);
+
           this.getPendingTxs({}, (err, txps) => {
             if (err) return next(err);
 
@@ -2028,7 +2080,6 @@ export class WalletService {
           );
         },
         next => {
-          if (opts.validateOutputs === false) return next();
           const validationError = this._validateOutputs(opts, wallet, next);
           if (validationError) {
             return next(validationError);
@@ -2208,7 +2259,6 @@ export class WalletService {
    * @param {Boolean} opts.sendMax - Optional. Send maximum amount of funds that make sense under the specified fee/feePerKb conditions. (defaults to false).
    * @param {string} opts.payProUrl - Optional. Paypro URL for peers to verify TX
    * @param {Boolean} opts.excludeUnconfirmedUtxos[=false] - Optional. Do not use UTXOs of unconfirmed transactions as inputs
-   * @param {Boolean} opts.validateOutputs[=true] - Optional. Perform validation on outputs.
    * @param {Boolean} opts.dryRun[=false] - Optional. Simulate the action but do not change server state.
    * @param {Array} opts.inputs - Optional. Inputs for this TX
    * @param {Array} opts.txpVersion - Optional. Version for TX Proposal (current = 4, only =3 allowed).
@@ -2341,7 +2391,7 @@ export class WalletService {
                     walletM: wallet.m,
                     walletN: wallet.n,
                     excludeUnconfirmedUtxos: !!opts.excludeUnconfirmedUtxos,
-                    validateOutputs: !opts.validateOutputs,
+                    instantAcceptanceEscrow: opts.instantAcceptanceEscrow,
                     addressType: wallet.addressType,
                     customData: opts.customData,
                     inputs: opts.inputs,
@@ -2364,6 +2414,18 @@ export class WalletService {
                 },
                 next => {
                   return ChainService.selectTxInputs(this, txp, wallet, opts, next);
+                },
+                async next => {
+                  if (!wallet.isZceCompatible() || !opts.instantAcceptanceEscrow) return next();
+                  try {
+                    opts.inputs = txp.inputs;
+                    const escrowAddress = await ChainService.getChangeAddress(this, wallet, opts);
+                    txp.escrowAddress = escrowAddress;
+                  } catch (error) {
+                    return next(error);
+                  }
+                  if (opts.dryRun) return next();
+                  this._store(wallet, txp.escrowAddress, next, true);
                 },
                 next => {
                   if (!changeAddress || wallet.singleAddress || opts.dryRun || opts.changeAddress) return next();
@@ -4938,6 +5000,41 @@ export class WalletService {
         }
       );
     });
+  }
+
+  oneInchGetTokens(req): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const credentials = this.oneInchGetCredentials();
+
+      const headers = {
+        'Content-Type': 'application/json'
+      };
+
+      const URL: string = credentials.API + '/v3.0/1/tokens';
+
+      this.request.get(
+        URL,
+        {
+          headers,
+          json: true
+        },
+        (err, data) => {
+          if (err) {
+            return reject(err.body ?? err);
+          } else {
+            return resolve(data.body.tokens);
+          }
+        }
+      );
+    });
+  }
+
+  getSpenderApprovalWhitelist(cb) {
+    if (Services.ERC20_SPENDER_APPROVAL_WHITELIST) {
+      return cb(null, Services.ERC20_SPENDER_APPROVAL_WHITELIST);
+    } else {
+      return cb(new Error('Could not get ERC20 spender approval whitelist'));
+    }
   }
 
   getPayId(url: string): Promise<any> {
