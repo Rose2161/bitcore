@@ -1,0 +1,42 @@
+# Snyk (https://snyk.io) policy file, patches or ignores known vulnerabilities.
+version: v1.25.1
+ignore: {}
+# patches apply the minimum changes required to fix a vulnerability
+patch:
+  SNYK-JS-LODASH-567746:
+    - bitcore-client > async > lodash:
+        patched: '2024-05-29T08:04:41.249Z'
+        id: SNYK-JS-LODASH-567746
+        path: bitcore-client > async > lodash
+    - bitcore-wallet-client > awesome-typescript-loader > lodash:
+        patched: '2024-05-29T08:04:41.249Z'
+        id: SNYK-JS-LODASH-567746
+        path: bitcore-wallet-client > awesome-typescript-loader > lodash
+    - bitcore-wallet-client > preconditions > lodash:
+        patched: '2024-05-29T08:04:41.249Z'
+        id: SNYK-JS-LODASH-567746
+        path: bitcore-wallet-client > preconditions > lodash
+    - bitcore-client > request-promise-native > request-promise-core > lodash:
+        patched: '2024-05-29T08:04:41.249Z'
+        id: SNYK-JS-LODASH-567746
+        path: >-
+          bitcore-client > request-promise-native > request-promise-core >
+          lodash
+    - crypto-wallet-core > ripple-binary-codec > lodash:
+        patched: '2024-05-29T08:04:41.249Z'
+        id: SNYK-JS-LODASH-567746
+        path: crypto-wallet-core > ripple-binary-codec > lodash
+    - bitcore-client > crypto-wallet-core > ripple-binary-codec > lodash:
+        patched: '2024-05-29T08:04:41.249Z'
+        id: SNYK-JS-LODASH-567746
+        path: bitcore-client > crypto-wallet-core > ripple-binary-codec > lodash
+    - bitcore-wallet-client > crypto-wallet-core > ripple-binary-codec > lodash:
+        patched: '2024-05-29T08:04:41.249Z'
+        id: SNYK-JS-LODASH-567746
+        path: >-
+          bitcore-wallet-client > crypto-wallet-core > ripple-binary-codec >
+          lodash
+    - bitcore-wallet-client > source-map-loader > async > lodash:
+        patched: '2024-05-29T08:04:41.249Z'
+        id: SNYK-JS-LODASH-567746
+        path: bitcore-wallet-client > source-map-loader > async > lodash
