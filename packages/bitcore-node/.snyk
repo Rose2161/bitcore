@@ -40,3 +40,7 @@ patch:
         patched: '2024-05-29T08:04:57.252Z'
         id: SNYK-JS-LODASH-567746
         path: bitcore-wallet-client > source-map-loader > async > lodash
+    - bitcore-wallet-client > crypto-wallet-core > xrpl > lodash:
+        patched: '2024-05-29T08:11:26.122Z'
+        id: SNYK-JS-LODASH-567746
+        path: bitcore-wallet-client > crypto-wallet-core > xrpl > lodash
