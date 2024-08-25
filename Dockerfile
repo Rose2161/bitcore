@@ -1,4 +1,4 @@
-FROM node:22.6.0
+FROM node:22.6.0-slim
 
 # Install Chrome
 
